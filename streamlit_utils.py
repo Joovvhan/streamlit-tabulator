@@ -8,8 +8,8 @@ def render_upload_section():
     """파일 업로더와 업로드 처리 버튼 UI 및 로직을 렌더링합니다."""
     st.subheader("파일 업로드")
     uploaded_files = st.file_uploader(
-        "📂 docx 파일 업로드 (여러 개 가능)",
-        accept_multiple_files=True, # 항상 True로 설정하여 uploaded_files가 리스트임을 보장
+        "📂 docx 파일 업로드",
+        accept_multiple_files=True,
         type=["docx"],
         key="docx_uploader" # 고유 키 부여
     )
