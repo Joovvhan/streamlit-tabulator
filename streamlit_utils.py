@@ -1,11 +1,19 @@
 from collections import defaultdict
+from dotenv import load_dotenv
 
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+import os
+
+from pydantic import create_model
+from google import genai
 
 from data_utils import process_docx_file
 from data_utils import process_xlsx_file
+
+load_dotenv()
+print("GOOGLE_API_KEY:", os.getenv("GOOGLE_API_KEY"))  # 환경 변수 값 출력 확인
 
 def render_upload_section():
     """파일 업로더와 업로드 처리 버튼 UI 및 로직을 렌더링합니다."""
@@ -283,6 +291,86 @@ def handle_table_submission():
                 if st.session_state.get(checkbox_key, False):
                     selected_data_to_print.append(data_item.get("content", ""))
 
-        print('\n'.join(selected_data_to_print))  # 텍스트 출력 (또는 다른 처리 로직)
-        st.success("선택된 데이터를 바탕으로 표를 채웠습니다.")
+        if not selected_data_to_print:
+            st.warning("선택된 데이터가 없습니다.")
+            return
+
+        selection = st.session_state.get("current_selected_table")
+        if not selection:
+            st.warning("수정 중인 테이블이 없습니다.")
+            return
+
+        sheet_name = selection["sheet_name"]
+        table_index = selection["table_index"]
+        key = f"{sheet_name}_{table_index}"
+
+        edited_df = st.session_state.edited_table_data.get(key)
+        if edited_df is None or edited_df.empty:
+            st.warning("수정 중인 테이블 데이터를 찾을 수 없습니다.")
+            return
+
+        keys = list(edited_df.iloc[0].astype(str))
+        # DynamicTableCell = create_dynamic_table_cell_model(keys)
+
+        def create_dynamic_table_cell_model(keys: list[str]):
+            fields = {key: (str, ...) for key in keys}  # 모든 필드를 필수 str 타입으로 설정
+            DynamicTableCell = create_model('DynamicTableCell', **fields)
+            return DynamicTableCell
+        
+        DynamicTableCell = create_dynamic_table_cell_model(keys)
+
+        print(DynamicTableCell.schema_json(indent=2, ensure_ascii=False))  # 스키마 출력
+
+        client = genai.Client()
+
+        prompt_text = "\n".join(selected_data_to_print)
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=(
+                "아래 열 이름들을 가진 표를 채우기 위한 JSON 배열을 만들어 주세요.\n"
+                f"열 이름(키): {keys}\n"
+                "입력 데이터:\n"
+                f"{prompt_text}\n"
+            ),
+            config={
+                "response_mime_type": "application/json",
+                "response_schema": list[DynamicTableCell],
+            },
+        )
+
+        cells = response.parsed
+
+        print(cells)
+
+        def cells_to_dataframe(cells):
+            # 각 인스턴스를 dict로 변환
+            dict_list = [cell.dict() for cell in cells]
+
+            # key들을 첫 행으로 넣고, values들을 그 아래 행으로 붙이기
+            keys = list(dict_list[0].keys())  # 첫 번째 dict의 key 목록
+            rows = [list(d.values()) for d in dict_list]
+
+            # 전체 데이터 구성: 첫 줄은 keys, 그 아래는 실제 데이터
+            data = [keys] + rows
+
+            # DataFrame 생성 (header 없이 숫자 인덱스 열 이름 사용)
+            df = pd.DataFrame(data)
+
+            return df
+        
+        df = cells_to_dataframe(cells)
+        print(df)
+
+        st.session_state["generated_table"] = df
+
+        st.success("Gemini 결과를 표에 반영했습니다.")
         st.rerun()
+
+def render_generated_table():
+    df = st.session_state.get("generated_table")
+    if df is not None:
+        st.subheader("생성된 표")
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("아직 생성된 표가 없습니다.")

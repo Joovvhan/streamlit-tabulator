@@ -2,3 +2,6 @@ streamlit
 python-docx
 openpyxl
 pandas
+pydantic
+google-genai
+python-dotenv
